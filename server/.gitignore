@@ -1,5 +1,8 @@
-# hide node_module
+# this is gitignore file
 
-node_modules
-
-/*.env
+node_modules/
+.env
+dist/
+coverage/
+.vscode/
+.DS_Store
