@@ -31,6 +31,9 @@ const LiveTrail = () => {
   const trailIdRef = useRef(null);
   const socketRef = useRef(null);
   const intervalRef = useRef(null);
+  const watchIdRef = useRef(null);
+  const latestFixRef = useRef(null); // most recent coordinate pushed by watchPosition
+  const staleWarnedRef = useRef(false);
   const wakeLockRef = useRef(null);
   const startTimeRef = useRef(null);
   const isTrackingRef = useRef(false); // guards back-button/unload prompts
@@ -173,43 +176,61 @@ const LiveTrail = () => {
   }, []);
 
   const startGeoCapture = () => {
-    // Every second: grab one fresh coordinate, push it into the local
-    // points array (which drives the polyline redraw), and stream that
-    // same point to the server over the socket, which appends it to the
-    // in-memory array on that side too before persisting it.
-    intervalRef.current = setInterval(() => {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const point = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-            accuracy: position.coords.accuracy,
-            timestamp: Date.now(),
-          };
-
-          setPoints((prev) => [...prev, point]);
-
-          if (trailIdRef.current && socketRef.current) {
-            socketRef.current.emit("trail:point", {
-              trailId: trailIdRef.current,
-              ...point,
-            });
-          }
-        },
-        (err) => {
-          console.error("Geolocation error:", err);
-          toast.warn(
-            err.code === err.PERMISSION_DENIED
-              ? "Location permission denied. Enable it to keep recording."
-              : "Lost GPS signal — will keep trying to reconnect."
-          );
-        },
-        {
-          enableHighAccuracy: true,
-          maximumAge: 0,
-          timeout: 8000,
+    // Let the browser/OS push fixes to us as they naturally become
+    // available (this is the efficient, reliable way to use GPS —
+    // forcing a brand new fix on demand every second is what was causing
+    // the false "lost GPS" warnings, since most devices can't produce a
+    // fresh fix that fast).
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        latestFixRef.current = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          timestamp: Date.now(),
+        };
+        staleWarnedRef.current = false;
+      },
+      (err) => {
+        console.error("Geolocation error:", err);
+        if (err.code === err.PERMISSION_DENIED) {
+          toast.warn("Location permission denied. Enable it to keep recording.");
         }
-      );
+        // Other watch errors are transient (e.g. momentary signal dropout);
+        // the staleness check below decides if it's actually worth warning
+        // the user, so we don't spam a toast on every blip here.
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 2000,
+        timeout: 15000,
+      }
+    );
+
+    // Once per second: take whatever the latest known fix is, append it
+    // to the local array (redraws the line) and stream it to the server.
+    intervalRef.current = setInterval(() => {
+      const point = latestFixRef.current;
+      if (!point) return; // no fix yet at all — first one can take a moment
+
+      const ageMs = Date.now() - point.timestamp;
+      if (ageMs > 10000) {
+        // No fresh fix in 10+ seconds — genuinely worth flagging once.
+        if (!staleWarnedRef.current) {
+          toast.warn("Lost GPS signal — trying to reconnect...");
+          staleWarnedRef.current = true;
+        }
+        return;
+      }
+
+      setPoints((prev) => [...prev, point]);
+
+      if (trailIdRef.current && socketRef.current) {
+        socketRef.current.emit("trail:point", {
+          trailId: trailIdRef.current,
+          ...point,
+        });
+      }
     }, 1000);
   };
 
@@ -217,6 +238,10 @@ const LiveTrail = () => {
     if (intervalRef.current !== null) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
+    }
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
     }
     releaseWakeLock();
     if (trailId) {
@@ -251,6 +276,9 @@ const LiveTrail = () => {
       // Component unmount safety net (e.g. programmatic navigation elsewhere)
       if (intervalRef.current !== null) {
         clearInterval(intervalRef.current);
+      }
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
       }
       releaseWakeLock();
     };
