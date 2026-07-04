@@ -30,7 +30,7 @@ const LiveTrail = () => {
 
   const trailIdRef = useRef(null);
   const socketRef = useRef(null);
-  const watchIdRef = useRef(null);
+  const intervalRef = useRef(null);
   const wakeLockRef = useRef(null);
   const startTimeRef = useRef(null);
   const isTrackingRef = useRef(false); // guards back-button/unload prompts
@@ -154,7 +154,7 @@ const LiveTrail = () => {
         isTrackingRef.current = true;
         setPhase(PHASE.TRACKING);
         requestWakeLock();
-        startGeoWatch();
+        startGeoCapture();
       });
     };
 
@@ -172,45 +172,51 @@ const LiveTrail = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startGeoWatch = () => {
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (position) => {
-        const point = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          timestamp: Date.now(),
-        };
+  const startGeoCapture = () => {
+    // Every second: grab one fresh coordinate, push it into the local
+    // points array (which drives the polyline redraw), and stream that
+    // same point to the server over the socket, which appends it to the
+    // in-memory array on that side too before persisting it.
+    intervalRef.current = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const point = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            timestamp: Date.now(),
+          };
 
-        setPoints((prev) => [...prev, point]);
+          setPoints((prev) => [...prev, point]);
 
-        if (trailIdRef.current && socketRef.current) {
-          socketRef.current.emit("trail:point", {
-            trailId: trailIdRef.current,
-            ...point,
-          });
+          if (trailIdRef.current && socketRef.current) {
+            socketRef.current.emit("trail:point", {
+              trailId: trailIdRef.current,
+              ...point,
+            });
+          }
+        },
+        (err) => {
+          console.error("Geolocation error:", err);
+          toast.warn(
+            err.code === err.PERMISSION_DENIED
+              ? "Location permission denied. Enable it to keep recording."
+              : "Lost GPS signal — will keep trying to reconnect."
+          );
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 8000,
         }
-      },
-      (err) => {
-        console.error("Geolocation error:", err);
-        toast.warn(
-          err.code === err.PERMISSION_DENIED
-            ? "Location permission denied. Enable it to keep recording."
-            : "Lost GPS signal — will keep trying to reconnect."
-        );
-      },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 1000,
-        timeout: 15000,
-      }
-    );
+      );
+    }, 1000);
   };
 
   const cleanupAndNavigate = (trailId) => {
-    if (watchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
+    if (intervalRef.current !== null) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
     releaseWakeLock();
     if (trailId) {
@@ -243,8 +249,8 @@ const LiveTrail = () => {
   useEffect(() => {
     return () => {
       // Component unmount safety net (e.g. programmatic navigation elsewhere)
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current);
       }
       releaseWakeLock();
     };
@@ -267,8 +273,8 @@ const LiveTrail = () => {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-900 text-white flex flex-col">
-      <div className="p-4 flex items-center justify-between bg-zinc-800 shadow-md z-10">
+    <div className="h-screen w-full bg-zinc-900 text-white flex flex-col overflow-hidden">
+      <div className="p-4 flex items-center justify-between bg-zinc-800 shadow-md z-10 shrink-0">
         <div className="flex items-center gap-2">
           <FaLocationArrow
             className={`text-amber-500 ${
@@ -298,7 +304,7 @@ const LiveTrail = () => {
         </button>
       </div>
 
-      <div className="flex-1">
+      <div className="flex-1 min-h-0">
         <TrailMap points={points} live height="100%" />
       </div>
     </div>

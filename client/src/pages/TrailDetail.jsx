@@ -53,8 +53,8 @@ const TrailDetail = () => {
   const distanceKm = (trail.distanceMeters / 1000).toFixed(2);
 
   return (
-    <div className="min-h-screen bg-zinc-900 text-white flex flex-col">
-      <div className="p-4 bg-zinc-800 shadow-md flex items-center gap-3">
+    <div className="h-screen w-full bg-zinc-900 text-white flex flex-col overflow-hidden">
+      <div className="p-4 bg-zinc-800 shadow-md flex items-center gap-3 shrink-0">
         <button
           onClick={() => navigate("/")}
           className="text-zinc-300 hover:text-white"
@@ -70,7 +70,7 @@ const TrailDetail = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 p-3 bg-zinc-800/60 text-center text-sm">
+      <div className="grid grid-cols-3 gap-2 p-3 bg-zinc-800/60 text-center text-sm shrink-0">
         <div className="flex flex-col items-center gap-1">
           <FaRoute className="text-amber-500" />
           <span>{distanceKm} km</span>
@@ -85,7 +85,7 @@ const TrailDetail = () => {
         </div>
       </div>
 
-      <div className="flex-1">
+      <div className="flex-1 min-h-0">
         <TrailMap points={trail.points} live={false} height="100%" />
       </div>
     </div>

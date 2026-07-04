@@ -3,6 +3,31 @@ import { MapContainer, TileLayer, Polyline, Marker, useMap } from "react-leaflet
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+// Leaflet measures its container's pixel size the moment it mounts. If that
+// happens while a parent flex/CSS transition hasn't settled yet (very common
+// right after a route change), Leaflet freezes on a 0x0 or stale size and the
+// map appears as a blank/black box even though the DOM node is there. Calling
+// invalidateSize() after mount (and on resize) forces it to re-measure.
+function InvalidateSizeOnMount({ watch }) {
+  const map = useMap();
+  useEffect(() => {
+    const fix = () => map.invalidateSize();
+    fix();
+    const t1 = setTimeout(fix, 100);
+    const t2 = setTimeout(fix, 400);
+    window.addEventListener("resize", fix);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      window.removeEventListener("resize", fix);
+    };
+    // re-run whenever the point count changes for the live map too,
+    // in case the container was resized by surrounding UI (e.g. stats bar)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, watch]);
+  return null;
+}
+
 // Default Leaflet marker images don't resolve correctly through bundlers -
 // point them at the CDN instead so pins render properly.
 const startIcon = new L.Icon({
@@ -62,7 +87,10 @@ const TrailMap = ({ points = [], live = false, height = "100%" }) => {
   const polylinePositions = points.map((p) => [p.lat, p.lng]);
 
   return (
-    <div style={{ height, width: "100%" }} className="rounded-lg overflow-hidden">
+    <div
+      style={{ height, width: "100%", minHeight: "300px" }}
+      className="rounded-lg overflow-hidden"
+    >
       <MapContainer
         center={initialCenter}
         zoom={hasPoints ? 16 : 5}
@@ -92,6 +120,7 @@ const TrailMap = ({ points = [], live = false, height = "100%" }) => {
 
         {live && <RecenterOnLatest position={latest ? [latest.lat, latest.lng] : null} follow={live} />}
         {!live && <FitToPath points={points} />}
+        <InvalidateSizeOnMount watch={points.length} />
       </MapContainer>
     </div>
   );
