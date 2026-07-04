@@ -4,6 +4,7 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import userRouter from "./routes/user.route.js";
+import trailRouter from "./routes/trail.route.js";
 import limiter from "./middlewares/ratelimiter.middleware.js";
 import helmet from "helmet";
 import hpp from "hpp";
@@ -28,6 +29,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api", limiter);
 
 app.use("/api/user", userRouter);
+app.use("/api/trail", trailRouter);
 
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "success", message: "Server is healthy" });
