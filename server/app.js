@@ -16,9 +16,10 @@ app.use(hpp());
 
 const allowedOrigins = [
   process.env.CLIENT_URL,
+  "https://localhost",
+  "http://localhost",
   "capacitor://localhost"
 ];
-
 app.use(
   cors({
     origin: allowedOrigins, 

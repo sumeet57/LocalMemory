@@ -14,6 +14,8 @@ connectDB();
 const server = http.createServer(app);
 const allowedOrigins = [
   process.env.CLIENT_URL,
+  "https://localhost",
+  "http://localhost",
   "capacitor://localhost"
 ];
 
