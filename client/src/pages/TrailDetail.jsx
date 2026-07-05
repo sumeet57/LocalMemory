@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import { FaArrowLeft, FaRoute, FaClock, FaMapMarkedAlt } from "react-icons/fa";
+import { FaArrowLeft, FaRoute, FaClock, FaMapMarkedAlt, FaCompass } from "react-icons/fa";
 import TrailMap from "../components/TrailMap";
 import { trailApi } from "../interceptors/Trail.api";
+import { useLiveGeolocation } from "../hooks/useLiveGeolocation";
 
 const formatDuration = (startedAt, endedAt) => {
   if (!startedAt || !endedAt) return "—";
@@ -19,6 +20,12 @@ const TrailDetail = () => {
   const navigate = useNavigate();
   const [trail, setTrail] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Show the viewer's own live position + facing direction on top of the
+  // saved route, so they can retrace it in person — same overlay used while
+  // recording, just not building/sending a new breadcrumb here.
+  const { position: livePosition, heading, needsCompassPermission, enableCompass } =
+    useLiveGeolocation({ active: true });
 
   useEffect(() => {
     let cancelled = false;
@@ -85,8 +92,23 @@ const TrailDetail = () => {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0">
-        <TrailMap points={trail.points} live={false} height="100%" />
+      <div className="flex-1 min-h-0 relative">
+        <TrailMap
+          points={trail.points}
+          liveLocation={livePosition}
+          heading={heading}
+          followByDefault={false}
+          height="100%"
+        />
+
+        {needsCompassPermission && (
+          <button
+            onClick={enableCompass}
+            className="absolute top-3 left-3 z-[1000] bg-white/95 text-zinc-800 text-sm font-medium px-3 py-2 rounded-lg shadow-lg flex items-center gap-2"
+          >
+            <FaCompass className="text-blue-600" /> Enable compass
+          </button>
+        )}
       </div>
     </div>
   );

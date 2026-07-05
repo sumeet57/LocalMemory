@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
-import { FaStop, FaLocationArrow, FaExclamationTriangle } from "react-icons/fa";
+import { FaStop, FaLocationArrow, FaExclamationTriangle, FaCompass } from "react-icons/fa";
 import TrailMap from "../components/TrailMap";
-import { getSocket, disconnectSocket } from "../utils/socket.utils";
-import { bearing, distanceMeters, totalDistance } from "../utils/geo.utils";
+import { getSocket } from "../utils/socket.utils";
+import { totalDistance } from "../utils/geo.utils";
+import { useLiveGeolocation } from "../hooks/useLiveGeolocation";
 
 const PHASE = {
   INITIALIZING: "initializing",
@@ -28,18 +29,50 @@ const LiveTrail = () => {
   const [points, setPoints] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
   const [elapsedMs, setElapsedMs] = useState(0);
-  const [heading, setHeading] = useState(null);
 
   const trailIdRef = useRef(null);
   const socketRef = useRef(null);
-  const intervalRef = useRef(null);
-  const watchIdRef = useRef(null);
-  const latestFixRef = useRef(null); // most recent coordinate pushed by watchPosition
-  const lastAddedPointRef = useRef(null); // last point we actually committed, for bearing calc
-  const staleWarnedRef = useRef(false);
   const wakeLockRef = useRef(null);
   const startTimeRef = useRef(null);
   const isTrackingRef = useRef(false); // guards back-button/unload prompts
+  const staleToastShownRef = useRef(false);
+
+  // Every accepted GPS fix (already outlier-filtered) lands here — build the
+  // breadcrumb array and stream it to the server.
+  const handleAccepted = useCallback((point) => {
+    setPoints((prev) => [...prev, point]);
+
+    if (trailIdRef.current && socketRef.current) {
+      socketRef.current.emit("trail:point", {
+        trailId: trailIdRef.current,
+        lat: point.lat,
+        lng: point.lng,
+        accuracy: point.accuracy,
+        timestamp: point.timestamp,
+      });
+    }
+  }, []);
+
+  const {
+    position: livePosition,
+    heading,
+    isStale,
+    needsCompassPermission,
+    enableCompass,
+  } = useLiveGeolocation({
+    active: phase === PHASE.TRACKING,
+    onAccepted: handleAccepted,
+  });
+
+  // Surface GPS staleness as a toast (hook only exposes the boolean)
+  useEffect(() => {
+    if (isStale && !staleToastShownRef.current) {
+      staleToastShownRef.current = true;
+      toast.warn("Lost GPS signal — trying to reconnect...");
+    } else if (!isStale) {
+      staleToastShownRef.current = false;
+    }
+  }, [isStale]);
 
   // ---- Screen Wake Lock: keep the screen on (dimmed) while tracking ----
   const requestWakeLock = useCallback(async () => {
@@ -48,7 +81,6 @@ const LiveTrail = () => {
         wakeLockRef.current = await navigator.wakeLock.request("screen");
       }
     } catch (err) {
-      // Non-fatal: some browsers / low battery states reject this.
       console.warn("Wake Lock request failed:", err);
     }
   }, []);
@@ -62,7 +94,6 @@ const LiveTrail = () => {
     wakeLockRef.current = null;
   }, []);
 
-  // Re-acquire the wake lock if the tab regains visibility mid-trail
   useEffect(() => {
     const onVisibilityChange = async () => {
       if (
@@ -90,7 +121,6 @@ const LiveTrail = () => {
 
     window.addEventListener("beforeunload", onBeforeUnload);
 
-    // Intercept back-button gestures with a dummy history entry
     window.history.pushState({ trailGuard: true }, "");
     const onPopState = () => {
       if (!isTrackingRef.current) return;
@@ -169,7 +199,6 @@ const LiveTrail = () => {
         isTrackingRef.current = true;
         setPhase(PHASE.TRACKING);
         requestWakeLock();
-        startGeoCapture();
       });
     };
 
@@ -187,102 +216,7 @@ const LiveTrail = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startGeoCapture = () => {
-    // Let the browser/OS push fixes to us as they naturally become
-    // available (this is the efficient, reliable way to use GPS —
-    // forcing a brand new fix on demand every second is what was causing
-    // the false "lost GPS" warnings, since most devices can't produce a
-    // fresh fix that fast).
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (position) => {
-        latestFixRef.current = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          // Only present on some devices, and only while actually moving —
-          // null/NaN otherwise. We fall back to a computed bearing below.
-          heading:
-            typeof position.coords.heading === "number" &&
-            !Number.isNaN(position.coords.heading)
-              ? position.coords.heading
-              : null,
-          timestamp: Date.now(),
-        };
-        staleWarnedRef.current = false;
-      },
-      (err) => {
-        console.error("Geolocation error:", err);
-        if (err.code === err.PERMISSION_DENIED) {
-          toast.warn("Location permission denied. Enable it to keep recording.");
-        }
-        // Other watch errors are transient (e.g. momentary signal dropout);
-        // the staleness check below decides if it's actually worth warning
-        // the user, so we don't spam a toast on every blip here.
-      },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 2000,
-        timeout: 15000,
-      }
-    );
-
-    // Once per second: take whatever the latest known fix is, append it
-    // to the local array (redraws the line) and stream it to the server.
-    intervalRef.current = setInterval(() => {
-      const point = latestFixRef.current;
-      if (!point) return; // no fix yet at all — first one can take a moment
-
-      const ageMs = Date.now() - point.timestamp;
-      if (ageMs > 10000) {
-        // No fresh fix in 10+ seconds — genuinely worth flagging once.
-        if (!staleWarnedRef.current) {
-          toast.warn("Lost GPS signal — trying to reconnect...");
-          staleWarnedRef.current = true;
-        }
-        return;
-      }
-
-      setPoints((prev) => [...prev, point]);
-
-      // Work out which way the user is facing:
-      // 1) Trust the device's own GPS heading if it gave us one.
-      // 2) Otherwise derive it from the bearing between the last two
-      //    committed points — but only once they've actually moved a
-      //    couple of meters, so we don't get jittery flips while standing
-      //    still (GPS noise alone can look like "movement" of a meter).
-      // 3) If neither is available, just keep showing the last known
-      //    heading (matches how Google Maps behaves when you pause).
-      if (point.heading !== null) {
-        setHeading(point.heading);
-      } else if (lastAddedPointRef.current) {
-        const moved = distanceMeters(lastAddedPointRef.current, point);
-        if (moved > 2) {
-          setHeading(bearing(lastAddedPointRef.current, point));
-        }
-      }
-      lastAddedPointRef.current = point;
-
-      if (trailIdRef.current && socketRef.current) {
-        socketRef.current.emit("trail:point", {
-          trailId: trailIdRef.current,
-          lat: point.lat,
-          lng: point.lng,
-          accuracy: point.accuracy,
-          timestamp: point.timestamp,
-        });
-      }
-    }, 1000);
-  };
-
   const cleanupAndNavigate = (trailId) => {
-    if (intervalRef.current !== null) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-    if (watchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
-    }
     releaseWakeLock();
     if (trailId) {
       navigate(`/trail/${trailId}`, { replace: true });
@@ -313,13 +247,6 @@ const LiveTrail = () => {
 
   useEffect(() => {
     return () => {
-      // Component unmount safety net (e.g. programmatic navigation elsewhere)
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-      }
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      }
       releaseWakeLock();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -378,8 +305,23 @@ const LiveTrail = () => {
         </button>
       </div>
 
-      <div className="flex-1 min-h-0">
-        <TrailMap points={points} live heading={heading} height="100%" />
+      <div className="flex-1 min-h-0 relative">
+        <TrailMap
+          points={points}
+          liveLocation={livePosition}
+          heading={heading}
+          followByDefault
+          height="100%"
+        />
+
+        {needsCompassPermission && (
+          <button
+            onClick={enableCompass}
+            className="absolute top-3 left-3 z-[1000] bg-white/95 text-zinc-800 text-sm font-medium px-3 py-2 rounded-lg shadow-lg flex items-center gap-2"
+          >
+            <FaCompass className="text-blue-600" /> Enable compass
+          </button>
+        )}
       </div>
     </div>
   );

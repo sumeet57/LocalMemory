@@ -6,7 +6,6 @@ import {
   Marker,
   Circle,
   useMap,
-  useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -51,8 +50,8 @@ const startIcon = new L.Icon({
 // ---------------------------------------------------------------------------
 // Google-Maps-style "you are here" marker: a blue dot with a white ring, a
 // soft pulsing halo when we don't know which way the user is facing, and a
-// directional "flashlight" cone when we do (either from GPS heading or from
-// the bearing between the last two fixes).
+// directional "flashlight" cone when we do (compass heading, or GPS-course
+// heading / bearing-between-fixes as a fallback).
 // ---------------------------------------------------------------------------
 const LOCATION_STYLE_ID = "trail-tracker-live-marker-styles";
 function ensureLocationMarkerStyles() {
@@ -113,25 +112,19 @@ function buildLocationIcon(heading) {
   });
 }
 
-/**
- * The live "you are here" marker: blue dot + facing cone + GPS accuracy
- * halo, matching the familiar Google Maps look.
- */
+/** The live "you are here" marker: blue dot + facing cone + GPS accuracy halo. */
 function LiveLocationMarker({ position, heading, accuracy }) {
   useEffect(() => {
     ensureLocationMarkerStyles();
   }, []);
 
-  // Round heading so we don't rebuild the icon on every 0.1° jitter
+  // Round heading so we don't rebuild the icon on every fractional-degree jitter
   const roundedHeading =
     typeof heading === "number" && !Number.isNaN(heading)
       ? Math.round(heading / 3) * 3
       : null;
 
-  const icon = useMemo(
-    () => buildLocationIcon(roundedHeading),
-    [roundedHeading]
-  );
+  const icon = useMemo(() => buildLocationIcon(roundedHeading), [roundedHeading]);
 
   if (!position) return null;
 
@@ -154,28 +147,29 @@ function LiveLocationMarker({ position, heading, accuracy }) {
   );
 }
 
-// Keeps the map centered on the latest point while tracking live — unless
-// the person has manually panned the map, in which case we back off and
-// let them look around (a "Recenter" button brings them back to follow mode).
-function FollowController({ position, follow, onUserPanned }) {
+// Keeps the map centered on the live position while `follow` is on.
+function FollowOnUpdate({ position, follow }) {
   const map = useMap();
-
-  useMapEvents({
-    dragstart() {
-      onUserPanned();
-    },
-  });
-
   useEffect(() => {
     if (follow && position) {
       map.setView(position, map.getZoom(), { animate: true });
     }
   }, [position, follow, map]);
-
   return null;
 }
 
-// Fits the map bounds to the full breadcrumb path (used for historical view)
+// Turns off auto-follow the moment the person manually drags the map, so
+// exploring around doesn't fight the live tracking.
+function DetectManualPan({ onUserPanned }) {
+  const map = useMap();
+  useEffect(() => {
+    map.on("dragstart", onUserPanned);
+    return () => map.off("dragstart", onUserPanned);
+  }, [map, onUserPanned]);
+  return null;
+}
+
+// Fits the map bounds to the full breadcrumb path once (used for historical view)
 function FitToPath({ points }) {
   const map = useMap();
   const didFit = useRef(false);
@@ -189,39 +183,44 @@ function FitToPath({ points }) {
   return null;
 }
 
-// Floating "recenter on me" button, shown once the user pans away from
-// follow mode during live tracking.
-function RecenterButton({ onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label="Recenter on my location"
-      className="absolute bottom-5 right-4 z-[1000] bg-white text-blue-600 rounded-full w-11 h-11 flex items-center justify-center shadow-lg active:scale-95 transition"
-      style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.35)" }}
-    >
-      <FaLocationArrow />
-    </button>
-  );
-}
-
 /**
- * points: [{ lat, lng, accuracy?, heading? }]
- * live: boolean - if true, shows the Google-Maps-style live location marker
- *       and follows it (until the user pans away)
+ * points: [{ lat, lng }] — the recorded/historical breadcrumb trail (red line)
+ * liveLocation: { lat, lng, accuracy } | null — the device's live position,
+ *   shown as a Google-Maps-style blue dot, independent of the breadcrumb
+ * heading: number | null — which way the device is facing (see TrailMap consumers)
+ * followByDefault: whether the map should auto-follow the live location as
+ *   soon as it's available (true while actively recording), vs. showing the
+ *   full route first and letting the person tap "recenter" (saved trail view)
  */
-const TrailMap = ({ points = [], live = false, heading = null, height = "100%" }) => {
+const TrailMap = ({
+  points = [],
+  liveLocation = null,
+  heading = null,
+  followByDefault = false,
+  height = "100%",
+}) => {
+  const mapRef = useRef(null);
+  const [follow, setFollow] = useState(followByDefault);
+
   const hasPoints = points.length > 0;
-  const latest = hasPoints ? points[points.length - 1] : null;
   const start = hasPoints ? points[0] : null;
-
-  const [follow, setFollow] = useState(true);
-
-  const initialCenter = latest
-    ? [latest.lat, latest.lng]
-    : [20.5937, 78.9629]; // fallback: center of India
-
   const polylinePositions = points.map((p) => [p.lat, p.lng]);
-  const latestPosition = latest ? [latest.lat, latest.lng] : null;
+  const liveLatLng = liveLocation ? [liveLocation.lat, liveLocation.lng] : null;
+
+  const initialCenter =
+    liveLatLng ||
+    (hasPoints
+      ? [points[points.length - 1].lat, points[points.length - 1].lng]
+      : [20.5937, 78.9629]); // fallback: center of India
+
+  const handleRecenter = () => {
+    setFollow(true);
+    if (mapRef.current && liveLatLng) {
+      mapRef.current.setView(liveLatLng, Math.max(mapRef.current.getZoom(), 17), {
+        animate: true,
+      });
+    }
+  };
 
   return (
     <div
@@ -229,15 +228,22 @@ const TrailMap = ({ points = [], live = false, heading = null, height = "100%" }
       className="rounded-lg overflow-hidden"
     >
       <MapContainer
+        ref={mapRef}
         center={initialCenter}
-        zoom={hasPoints ? 16 : 5}
+        zoom={hasPoints || liveLocation ? 16 : 5}
+        maxZoom={20}
         scrollWheelZoom={true}
         style={{ height: "100%", width: "100%" }}
       >
-        {/* Standard OSM "normal" street/terrain map layer */}
+        {/* Standard OSM "normal" street/terrain map layer. maxNativeZoom
+            caps the actual tile requests at 19 (OSM's real max); anything
+            past that just upscales the last tile so you can still zoom in
+            closer on a tight trail loop without the map refusing to zoom. */}
         <TileLayer
           attribution='&copy; OpenStreetMap contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          maxZoom={20}
+          maxNativeZoom={19}
         />
 
         {hasPoints && (
@@ -247,31 +253,38 @@ const TrailMap = ({ points = [], live = false, heading = null, height = "100%" }
           />
         )}
 
-        {start && (
-          <Marker position={[start.lat, start.lng]} icon={startIcon} />
-        )}
+        {start && <Marker position={[start.lat, start.lng]} icon={startIcon} />}
 
-        {live && latest && (
+        {liveLocation && (
           <LiveLocationMarker
-            position={latestPosition}
+            position={liveLatLng}
             heading={heading}
-            accuracy={latest.accuracy}
+            accuracy={liveLocation.accuracy}
           />
         )}
 
-        {live && (
-          <FollowController
-            position={latestPosition}
-            follow={follow}
-            onUserPanned={() => setFollow(false)}
-          />
+        {liveLocation && (
+          <>
+            <FollowOnUpdate position={liveLatLng} follow={follow} />
+            <DetectManualPan onUserPanned={() => setFollow(false)} />
+          </>
         )}
-        {!live && <FitToPath points={points} />}
-        <InvalidateSizeOnMount watch={points.length} />
+
+        {!followByDefault && <FitToPath points={points} />}
+        <InvalidateSizeOnMount watch={points.length + (liveLocation ? 1 : 0)} />
       </MapContainer>
 
-      {live && !follow && (
-        <RecenterButton onClick={() => setFollow(true)} />
+      {liveLocation && (
+        <button
+          onClick={handleRecenter}
+          aria-label="Recenter on my location"
+          className={`absolute bottom-5 right-4 z-[1000] rounded-full w-11 h-11 flex items-center justify-center shadow-lg active:scale-95 transition ${
+            follow ? "bg-blue-600 text-white" : "bg-white text-blue-600"
+          }`}
+          style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.35)" }}
+        >
+          <FaLocationArrow />
+        </button>
       )}
     </div>
   );
