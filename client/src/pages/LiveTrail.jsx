@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import { FaStop, FaLocationArrow, FaExclamationTriangle } from "react-icons/fa";
 import TrailMap from "../components/TrailMap";
 import { getSocket, disconnectSocket } from "../utils/socket.utils";
+import { bearing, distanceMeters, totalDistance } from "../utils/geo.utils";
 
 const PHASE = {
   INITIALIZING: "initializing",
@@ -27,12 +28,14 @@ const LiveTrail = () => {
   const [points, setPoints] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [heading, setHeading] = useState(null);
 
   const trailIdRef = useRef(null);
   const socketRef = useRef(null);
   const intervalRef = useRef(null);
   const watchIdRef = useRef(null);
   const latestFixRef = useRef(null); // most recent coordinate pushed by watchPosition
+  const lastAddedPointRef = useRef(null); // last point we actually committed, for bearing calc
   const staleWarnedRef = useRef(false);
   const wakeLockRef = useRef(null);
   const startTimeRef = useRef(null);
@@ -118,6 +121,15 @@ const LiveTrail = () => {
     return () => clearInterval(interval);
   }, [phase]);
 
+  const distanceKm = useMemo(() => totalDistance(points) / 1000, [points]);
+  const paceLabel = useMemo(() => {
+    if (distanceKm < 0.05 || elapsedMs < 5000) return "—";
+    const minutesPerKm = elapsedMs / 60000 / distanceKm;
+    const m = Math.floor(minutesPerKm);
+    const s = Math.round((minutesPerKm - m) * 60);
+    return `${m}:${String(s).padStart(2, "0")} /km`;
+  }, [distanceKm, elapsedMs]);
+
   // ---- Core: start the trail on mount ----
   useEffect(() => {
     if (!("geolocation" in navigator)) {
@@ -187,6 +199,13 @@ const LiveTrail = () => {
           lat: position.coords.latitude,
           lng: position.coords.longitude,
           accuracy: position.coords.accuracy,
+          // Only present on some devices, and only while actually moving —
+          // null/NaN otherwise. We fall back to a computed bearing below.
+          heading:
+            typeof position.coords.heading === "number" &&
+            !Number.isNaN(position.coords.heading)
+              ? position.coords.heading
+              : null,
           timestamp: Date.now(),
         };
         staleWarnedRef.current = false;
@@ -225,10 +244,31 @@ const LiveTrail = () => {
 
       setPoints((prev) => [...prev, point]);
 
+      // Work out which way the user is facing:
+      // 1) Trust the device's own GPS heading if it gave us one.
+      // 2) Otherwise derive it from the bearing between the last two
+      //    committed points — but only once they've actually moved a
+      //    couple of meters, so we don't get jittery flips while standing
+      //    still (GPS noise alone can look like "movement" of a meter).
+      // 3) If neither is available, just keep showing the last known
+      //    heading (matches how Google Maps behaves when you pause).
+      if (point.heading !== null) {
+        setHeading(point.heading);
+      } else if (lastAddedPointRef.current) {
+        const moved = distanceMeters(lastAddedPointRef.current, point);
+        if (moved > 2) {
+          setHeading(bearing(lastAddedPointRef.current, point));
+        }
+      }
+      lastAddedPointRef.current = point;
+
       if (trailIdRef.current && socketRef.current) {
         socketRef.current.emit("trail:point", {
           trailId: trailIdRef.current,
-          ...point,
+          lat: point.lat,
+          lng: point.lng,
+          accuracy: point.accuracy,
+          timestamp: point.timestamp,
         });
       }
     }, 1000);
@@ -319,6 +359,12 @@ const LiveTrail = () => {
             </p>
             <p className="text-xs text-zinc-400">
               {points.length} points &middot; {formatDuration(elapsedMs)}
+              {distanceKm > 0 && (
+                <>
+                  {" "}
+                  &middot; {distanceKm.toFixed(2)} km &middot; {paceLabel}
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -333,7 +379,7 @@ const LiveTrail = () => {
       </div>
 
       <div className="flex-1 min-h-0">
-        <TrailMap points={points} live height="100%" />
+        <TrailMap points={points} live heading={heading} height="100%" />
       </div>
     </div>
   );
