@@ -12,8 +12,12 @@ connectDB();
 // Wrap the express app in a plain http server so Socket.io can share the
 // same port (needed for both the REST API and the live GPS stream).
 const server = http.createServer(app);
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  "capacitor://localhost"
+];
 
-initSocket(server, process.env.CLIENT_URL);
+initSocket(server, allowedOrigins);
 
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

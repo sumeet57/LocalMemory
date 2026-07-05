@@ -13,9 +13,15 @@ const app = express();
 
 app.use(helmet());
 app.use(hpp());
+
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  "capacitor://localhost"
+];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization", "x-session-id"],
