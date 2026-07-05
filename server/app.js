@@ -27,7 +27,7 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization", "x-session-id"],
   })
 );
-
+app.set('trust proxy', 1);
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
