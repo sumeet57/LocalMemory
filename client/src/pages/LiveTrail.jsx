@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import { FaStop, FaLocationArrow, FaExclamationTriangle, FaCompass } from "react-icons/fa";
+import { App } from "@capacitor/app";
 import TrailMap from "../components/TrailMap";
 import { getSocket } from "../utils/socket.utils";
 import { totalDistance } from "../utils/geo.utils";
@@ -32,13 +33,10 @@ const LiveTrail = () => {
 
   const trailIdRef = useRef(null);
   const socketRef = useRef(null);
-  const wakeLockRef = useRef(null);
   const startTimeRef = useRef(null);
-  const isTrackingRef = useRef(false); // guards back-button/unload prompts
+  const isTrackingRef = useRef(false);
   const staleToastShownRef = useRef(false);
 
-  // Every accepted GPS fix (already outlier-filtered) lands here — build the
-  // breadcrumb array and stream it to the server.
   const handleAccepted = useCallback((point) => {
     setPoints((prev) => [...prev, point]);
 
@@ -64,7 +62,6 @@ const LiveTrail = () => {
     onAccepted: handleAccepted,
   });
 
-  // Surface GPS staleness as a toast (hook only exposes the boolean)
   useEffect(() => {
     if (isStale && !staleToastShownRef.current) {
       staleToastShownRef.current = true;
@@ -74,75 +71,67 @@ const LiveTrail = () => {
     }
   }, [isStale]);
 
-  // ---- Screen Wake Lock: keep the screen on (dimmed) while tracking ----
-  const requestWakeLock = useCallback(async () => {
-    try {
-      if ("wakeLock" in navigator) {
-        wakeLockRef.current = await navigator.wakeLock.request("screen");
-      }
-    } catch (err) {
-      console.warn("Wake Lock request failed:", err);
+  const cleanupAndNavigate = useCallback((trailId) => {
+    if (trailId) {
+      navigate(`/trail/${trailId}`, { replace: true });
+    } else {
+      navigate("/", { replace: true });
     }
-  }, []);
+  }, [navigate]);
 
-  const releaseWakeLock = useCallback(async () => {
-    try {
-      await wakeLockRef.current?.release();
-    } catch (_) {
-      /* ignore */
+  const stopTracking = useCallback((skipConfirm = false) => {
+    if (!isTrackingRef.current) return;
+
+    if (!skipConfirm) {
+      const confirmStop = window.confirm("Stop and save this trail?");
+      if (!confirmStop) return;
     }
-    wakeLockRef.current = null;
-  }, []);
+
+    isTrackingRef.current = false;
+    setPhase(PHASE.STOPPING);
+
+    const trailId = trailIdRef.current;
+    socketRef.current?.emit("trail:stop", { trailId }, () => {
+      cleanupAndNavigate(trailId);
+    });
+
+    setTimeout(() => cleanupAndNavigate(trailId), 4000);
+  }, [cleanupAndNavigate]);
 
   useEffect(() => {
-    const onVisibilityChange = async () => {
-      if (
-        document.visibilityState === "visible" &&
-        isTrackingRef.current &&
-        !wakeLockRef.current
-      ) {
-        await requestWakeLock();
-      }
+    const setupBackButtonGuard = async () => {
+      const listener = await App.addListener("backButton", () => {
+        if (!isTrackingRef.current) {
+          navigate(-1);
+          return;
+        }
+        const confirmLeave = window.confirm(
+          "You're still recording a live trail. Leave anyway? (Your progress so far is safe, but tracking will stop.)"
+        );
+        if (confirmLeave) {
+          stopTracking(true);
+        }
+      });
+      return listener;
     };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () =>
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [requestWakeLock]);
 
-  // ---- Navigation / refresh guard ----------------------------------------
-  useEffect(() => {
+    const backButtonListenerPromise = setupBackButtonGuard();
+
     const onBeforeUnload = (e) => {
       if (!isTrackingRef.current) return;
       e.preventDefault();
-      e.returnValue =
-        "A trail is currently being recorded. Leaving now may interrupt live tracking.";
+      e.returnValue = "A trail is currently being recorded. Leaving now may interrupt live tracking.";
       return e.returnValue;
     };
 
     window.addEventListener("beforeunload", onBeforeUnload);
 
-    window.history.pushState({ trailGuard: true }, "");
-    const onPopState = () => {
-      if (!isTrackingRef.current) return;
-      const confirmLeave = window.confirm(
-        "You're still recording a live trail. Leave anyway? (Your progress so far is safe, but tracking will stop.)"
-      );
-      if (confirmLeave) {
-        stopTracking(true);
-      } else {
-        window.history.pushState({ trailGuard: true }, "");
-      }
-    };
-    window.addEventListener("popstate", onPopState);
-
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
-      window.removeEventListener("popstate", onPopState);
+      backButtonListenerPromise.then((listener) => listener.remove());
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [navigate, stopTracking]);
 
-  // ---- Elapsed time ticker ----
   useEffect(() => {
     if (phase !== PHASE.TRACKING) return;
     const interval = setInterval(() => {
@@ -160,14 +149,7 @@ const LiveTrail = () => {
     return `${m}:${String(s).padStart(2, "0")} /km`;
   }, [distanceKm, elapsedMs]);
 
-  // ---- Core: start the trail on mount ----
   useEffect(() => {
-    if (!("geolocation" in navigator)) {
-      setPhase(PHASE.ERROR);
-      setErrorMsg("Geolocation is not supported on this device/browser.");
-      return;
-    }
-
     const socket = getSocket();
     socketRef.current = socket;
 
@@ -198,7 +180,6 @@ const LiveTrail = () => {
         startTimeRef.current = Date.now();
         isTrackingRef.current = true;
         setPhase(PHASE.TRACKING);
-        requestWakeLock();
       });
     };
 
@@ -213,44 +194,7 @@ const LiveTrail = () => {
       socket.off("connect_error");
       socket.off("connect", begin);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const cleanupAndNavigate = (trailId) => {
-    releaseWakeLock();
-    if (trailId) {
-      navigate(`/trail/${trailId}`, { replace: true });
-    } else {
-      navigate("/", { replace: true });
-    }
-  };
-
-  const stopTracking = (skipConfirm = false) => {
-    if (!isTrackingRef.current) return;
-
-    if (!skipConfirm) {
-      const confirmStop = window.confirm("Stop and save this trail?");
-      if (!confirmStop) return;
-    }
-
-    isTrackingRef.current = false;
-    setPhase(PHASE.STOPPING);
-
-    const trailId = trailIdRef.current;
-    socketRef.current?.emit("trail:stop", { trailId }, () => {
-      cleanupAndNavigate(trailId);
-    });
-
-    // Safety fallback in case the server doesn't ack in time
-    setTimeout(() => cleanupAndNavigate(trailId), 4000);
-  };
-
-  useEffect(() => {
-    return () => {
-      releaseWakeLock();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [cleanupAndNavigate]);
 
   if (phase === PHASE.ERROR) {
     return (

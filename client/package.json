@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.4.1",
+    "@capacitor/app": "^8.1.0",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
+    "@capacitor/geolocation": "^8.2.0",
     "@tailwindcss/vite": "^4.1.16",
     "axios": "^1.13.2",
     "leaflet": "^1.9.4",

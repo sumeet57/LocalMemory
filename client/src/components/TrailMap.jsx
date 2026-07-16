@@ -10,6 +10,7 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { FaLocationArrow } from "react-icons/fa";
+import { nearestPointOnPolyline, distanceMeters } from "../utils/geo.utils";
 
 // ---------------------------------------------------------------------------
 // Leaflet measures its container's pixel size the moment it mounts. If that
@@ -79,8 +80,9 @@ function ensureLocationMarkerStyles() {
 // group with a CSS transform instead of recomputing the path per heading.
 const CONE_PATH = "M60,60 L34.565,19.296 A48,48 0 0,1 85.435,19.296 Z";
 
-function buildLocationIcon(heading) {
+function buildLocationIcon(heading, offTrail) {
   const hasHeading = typeof heading === "number" && !Number.isNaN(heading);
+  const dotColor = offTrail ? "#f59e0b" : "#4285F4"; // amber when off the recorded path
 
   const cone = hasHeading
     ? `<svg width="120" height="120" viewBox="0 0 120 120"
@@ -88,13 +90,15 @@ function buildLocationIcon(heading) {
                  transform:rotate(${heading}deg); transform-origin:60px 60px;">
          <defs>
            <radialGradient id="trailConeGrad" cx="50%" cy="100%" r="100%">
-             <stop offset="0%" stop-color="#4285F4" stop-opacity="0.55" />
-             <stop offset="100%" stop-color="#4285F4" stop-opacity="0" />
+             <stop offset="0%" stop-color="${dotColor}" stop-opacity="0.55" />
+             <stop offset="100%" stop-color="${dotColor}" stop-opacity="0" />
            </radialGradient>
          </defs>
          <path d="${CONE_PATH}" fill="url(#trailConeGrad)" />
        </svg>`
-    : `<div class="trail-live-pulse"></div>`;
+    : `<div class="trail-live-pulse" style="background:${
+        offTrail ? "rgba(245,158,11,0.55)" : "rgba(66,133,244,0.55)"
+      }"></div>`;
 
   return L.divIcon({
     className: "",
@@ -102,7 +106,7 @@ function buildLocationIcon(heading) {
       <div style="position:relative; width:20px; height:20px;">
         ${cone}
         <div style="position:absolute; top:50%; left:50%; width:18px; height:18px;
-                    background:#4285F4; border:3px solid #ffffff; border-radius:50%;
+                    background:${dotColor}; border:3px solid #ffffff; border-radius:50%;
                     transform:translate(-50%,-50%);
                     box-shadow:0 1px 5px rgba(0,0,0,0.45);"></div>
       </div>
@@ -112,8 +116,10 @@ function buildLocationIcon(heading) {
   });
 }
 
-/** The live "you are here" marker: blue dot + facing cone + GPS accuracy halo. */
-function LiveLocationMarker({ position, heading, accuracy }) {
+/** The live "you are here" marker: blue dot + facing cone + GPS accuracy halo.
+ *  Turns amber if the raw fix is far enough from the recorded trail that we
+ *  chose not to snap it onto the line (i.e. you've actually wandered off). */
+function LiveLocationMarker({ position, heading, accuracy, offTrail }) {
   useEffect(() => {
     ensureLocationMarkerStyles();
   }, []);
@@ -124,7 +130,10 @@ function LiveLocationMarker({ position, heading, accuracy }) {
       ? Math.round(heading / 3) * 3
       : null;
 
-  const icon = useMemo(() => buildLocationIcon(roundedHeading), [roundedHeading]);
+  const icon = useMemo(
+    () => buildLocationIcon(roundedHeading, offTrail),
+    [roundedHeading, offTrail]
+  );
 
   if (!position) return null;
 
@@ -135,10 +144,10 @@ function LiveLocationMarker({ position, heading, accuracy }) {
           center={position}
           radius={accuracy}
           pathOptions={{
-            color: "#4285F4",
+            color: offTrail ? "#f59e0b" : "#4285F4",
             weight: 1,
-            fillColor: "#4285F4",
-            fillOpacity: 0.12,
+            fillColor: offTrail ? "#f59e0b" : "#4285F4",
+            fillOpacity: 0.1,
           }}
         />
       )}
@@ -205,20 +214,47 @@ const TrailMap = ({
   const hasPoints = points.length > 0;
   const start = hasPoints ? points[0] : null;
   const polylinePositions = points.map((p) => [p.lat, p.lng]);
-  const liveLatLng = liveLocation ? [liveLocation.lat, liveLocation.lng] : null;
+
+  // ---- Snap-to-trail --------------------------------------------------
+  // Two different GPS sessions (recording vs. re-walking later) almost
+  // never trace pixel-identical coordinates even on the same physical
+  // path — consumer GPS realistically drifts 5-20m. So rather than show
+  // the raw fix floating beside the line, we snap the displayed dot onto
+  // the nearest point of the recorded route whenever it's plausibly the
+  // same spot. If you've genuinely wandered off the path, we show your
+  // true position instead (and flag it amber) rather than falsely
+  // pinning you to a trail you're not actually on.
+  const snapInfo = useMemo(() => {
+    if (!liveLocation || points.length < 2) return null;
+    return nearestPointOnPolyline(liveLocation, points);
+  }, [liveLocation, points]);
+
+  const maxSnapDistance = liveLocation
+    ? Math.min(Math.max(liveLocation.accuracy || 15, 15), 50)
+    : 0;
+
+  const isOffTrail = !!(snapInfo && snapInfo.distance > maxSnapDistance);
+
+  const displayPosition = liveLocation
+    ? snapInfo && !isOffTrail
+      ? [snapInfo.point.lat, snapInfo.point.lng]
+      : [liveLocation.lat, liveLocation.lng]
+    : null;
 
   const initialCenter =
-    liveLatLng ||
+    displayPosition ||
     (hasPoints
       ? [points[points.length - 1].lat, points[points.length - 1].lng]
       : [20.5937, 78.9629]); // fallback: center of India
 
   const handleRecenter = () => {
     setFollow(true);
-    if (mapRef.current && liveLatLng) {
-      mapRef.current.setView(liveLatLng, Math.max(mapRef.current.getZoom(), 17), {
-        animate: true,
-      });
+    if (mapRef.current && displayPosition) {
+      mapRef.current.setView(
+        displayPosition,
+        Math.max(mapRef.current.getZoom(), 17),
+        { animate: true }
+      );
     }
   };
 
@@ -249,6 +285,11 @@ const TrailMap = ({
         {hasPoints && (
           <Polyline
             positions={polylinePositions}
+            // smoothFactor={0} disables Leaflet's default line simplification,
+            // which otherwise nudges the rendered line away from the exact
+            // recorded coordinates — the earlier cause of the dot looking
+            // "beside" the line even while actively recording.
+            smoothFactor={0}
             pathOptions={{ color: "#dc2626", weight: 5, opacity: 0.9 }}
           />
         )}
@@ -257,15 +298,16 @@ const TrailMap = ({
 
         {liveLocation && (
           <LiveLocationMarker
-            position={liveLatLng}
+            position={displayPosition}
             heading={heading}
-            accuracy={liveLocation.accuracy}
+            accuracy={isOffTrail ? liveLocation.accuracy : null}
+            offTrail={isOffTrail}
           />
         )}
 
         {liveLocation && (
           <>
-            <FollowOnUpdate position={liveLatLng} follow={follow} />
+            <FollowOnUpdate position={displayPosition} follow={follow} />
             <DetectManualPan onUserPanned={() => setFollow(false)} />
           </>
         )}
@@ -285,6 +327,12 @@ const TrailMap = ({
         >
           <FaLocationArrow />
         </button>
+      )}
+
+      {isOffTrail && (
+        <div className="absolute top-3 right-3 z-[1000] bg-amber-500 text-zinc-900 text-xs font-semibold px-3 py-1.5 rounded-full shadow-lg">
+          {Math.round(snapInfo.distance)}m off trail
+        </div>
       )}
     </div>
   );

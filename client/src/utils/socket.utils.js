@@ -19,7 +19,9 @@ export const getSocket = () => {
       autoConnect: false,
       auth: { sessionId },
       withCredentials: true,
-      transports: ["websocket", "polling"],
+      transports: ["polling", "websocket"],
+  reconnectionAttempts: 5,
+  reconnectionDelay: 2000
     });
   } else {
     socket.auth = { sessionId };
