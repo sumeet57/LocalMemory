@@ -8,29 +8,19 @@ import {
   FaUserPlus,
   FaEye,
   FaEyeSlash,
+  FaMountain,
 } from "react-icons/fa";
-import { toast } from "react-toastify";
 
-const InputField = ({
-  icon: Icon,
-  type,
-  name,
-  id,
-  placeholder,
-  value,
-  onChange,
-}) => {
+const InputField = ({ icon: Icon, type, name, id, placeholder, value, onChange }) => {
   const [inputType, setInputType] = useState(type);
-
   const toggleVisibility = () => {
     setInputType((prevType) => (prevType === "password" ? "text" : "password"));
   };
-
   const isPassword = type === "password";
 
   return (
     <div className="relative mb-4">
-      <Icon className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+      <Icon className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-faint" size={15} />
       <input
         type={inputType}
         name={name}
@@ -39,18 +29,16 @@ const InputField = ({
         placeholder={placeholder}
         onChange={onChange}
         value={value}
-        className="w-full pl-10 pr-10 py-2 border border-gray-700 bg-gray-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white placeholder-gray-500"
+        className="w-full pl-11 pr-11 py-3 border border-border bg-canvas rounded-xl focus:outline-none focus:ring-2 focus:ring-accent/60 focus:border-accent text-ink placeholder-ink-faint transition"
       />
       {isPassword && (
         <button
           type="button"
           onClick={toggleVisibility}
-          className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
-          aria-label={
-            inputType === "password" ? "Show password" : "Hide password"
-          }
+          className="absolute right-4 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink transition"
+          aria-label={inputType === "password" ? "Show password" : "Hide password"}
         >
-          {inputType === "password" ? <FaEye /> : <FaEyeSlash />}
+          {inputType === "password" ? <FaEye size={14} /> : <FaEyeSlash size={14} />}
         </button>
       )}
     </div>
@@ -60,17 +48,10 @@ const InputField = ({
 const Auth = () => {
   const { register, login, loading } = useContext(UserContext);
 
-  const authTypes = {
-    LOGIN: "login",
-    REGISTER: "register",
-  };
-
+  const authTypes = { LOGIN: "login", REGISTER: "register" };
   const [authType, setAuthType] = useState(authTypes.LOGIN);
   const [formData, setFormData] = useState({
-    fullName: {
-      firstName: "",
-      lastName: "",
-    },
+    fullName: { firstName: "", lastName: "" },
     email: "",
     password: "",
   });
@@ -79,19 +60,9 @@ const Auth = () => {
     const { value, name, id } = e.target;
     setFormData((prev) => {
       if (name === "fullName") {
-        return {
-          ...prev,
-          [name]: {
-            ...prev[name],
-            [id]: value,
-          },
-        };
-      } else {
-        return {
-          ...prev,
-          [name]: value,
-        };
+        return { ...prev, [name]: { ...prev[name], [id]: value } };
       }
+      return { ...prev, [name]: value };
     });
   }, []);
 
@@ -116,23 +87,41 @@ const Auth = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-zinc-900 p-4">
-      <div className="bg-zinc-800 p-8 rounded-xl shadow-2xl w-full max-w-md">
-        <h2 className="text-3xl font-bold mb-6 text-white text-center">
-          {authType === authTypes.LOGIN ? "Sign In" : "Create Account"}
-        </h2>
+    <div className="min-h-screen flex items-center justify-center bg-canvas p-4">
+      {/* Subtle radial accent glow behind the card for depth without clutter */}
+      <div
+        className="pointer-events-none fixed inset-0"
+        style={{
+          background:
+            "radial-gradient(600px circle at 50% 15%, rgba(250,204,21,0.07), transparent 70%)",
+        }}
+      />
+
+      <div className="relative bg-surface border border-border p-8 rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="flex flex-col items-center mb-7">
+          <div className="w-12 h-12 rounded-xl bg-accent flex items-center justify-center mb-3">
+            <FaMountain className="text-accent-ink" size={20} />
+          </div>
+          <h2 className="font-display text-2xl font-bold text-ink text-center">
+            {authType === authTypes.LOGIN ? "Welcome back" : "Create your account"}
+          </h2>
+          <p className="text-ink-muted text-sm mt-1 text-center">
+            {authType === authTypes.LOGIN
+              ? "Sign in to track your next trail"
+              : "Start recording your hikes in minutes"}
+          </p>
+        </div>
 
         <form onSubmit={handleSubmit} key={authType}>
           {authType === authTypes.REGISTER && (
-            <div className="flex gap-4">
+            <div className="flex gap-3">
               <div className="flex-1">
                 <InputField
                   icon={FaUser}
                   type="text"
                   name="fullName"
                   id="firstName"
-                  required
-                  placeholder="First Name"
+                  placeholder="First name"
                   onChange={updateValues}
                   value={formData.fullName.firstName}
                 />
@@ -142,9 +131,8 @@ const Auth = () => {
                   icon={FaUser}
                   type="text"
                   name="fullName"
-                  required
                   id="lastName"
-                  placeholder="Last Name"
+                  placeholder="Last name"
                   onChange={updateValues}
                   value={formData.fullName.lastName}
                 />
@@ -157,8 +145,7 @@ const Auth = () => {
             type="email"
             name="email"
             id="email"
-            required
-            placeholder="Email Address"
+            placeholder="Email address"
             onChange={updateValues}
             value={formData.email}
           />
@@ -176,14 +163,10 @@ const Auth = () => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full flex items-center justify-center gap-2 mt-6 p-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition duration-150 disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 mt-2 py-3 bg-accent hover:bg-accent-hover text-accent-ink font-semibold rounded-xl shadow-lg shadow-accent/10 transition disabled:opacity-50 active:scale-[0.99]"
           >
-            {authType === authTypes.LOGIN ? <FaSignInAlt /> : <FaUserPlus />}
-            {loading
-              ? "Processing..."
-              : authType === authTypes.LOGIN
-              ? "Login"
-              : "Register"}
+            {authType === authTypes.LOGIN ? <FaSignInAlt size={14} /> : <FaUserPlus size={14} />}
+            {loading ? "Please wait..." : authType === authTypes.LOGIN ? "Sign in" : "Create account"}
           </button>
         </form>
 
@@ -191,11 +174,14 @@ const Auth = () => {
           <button
             type="button"
             onClick={toggleAuthType}
-            className="text-blue-400 hover:text-blue-300 transition duration-150 text-sm"
+            className="text-ink-muted hover:text-accent transition text-sm"
           >
             {authType === authTypes.LOGIN
-              ? "Don't have an account? Sign Up"
-              : "Already have an account? Login"}
+              ? "Don't have an account? "
+              : "Already have an account? "}
+            <span className="text-accent font-medium">
+              {authType === authTypes.LOGIN ? "Sign up" : "Sign in"}
+            </span>
           </button>
         </div>
       </div>

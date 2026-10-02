@@ -15,6 +15,16 @@ const formatDuration = (startedAt, endedAt) => {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 };
 
+const StatChip = ({ icon: Icon, label, value }) => (
+  <div className="flex items-center gap-2 bg-canvas/60 rounded-xl py-2.5 px-3 flex-1 justify-center">
+    <Icon className="text-accent" size={13} />
+    <div className="leading-tight">
+      <div className="font-display font-bold text-sm">{value}</div>
+      <div className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</div>
+    </div>
+  </div>
+);
+
 const TrailDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -22,8 +32,7 @@ const TrailDetail = () => {
   const [loading, setLoading] = useState(true);
 
   // Show the viewer's own live position + facing direction on top of the
-  // saved route, so they can retrace it in person — same overlay used while
-  // recording, just not building/sending a new breadcrumb here.
+  // saved route, so they can retrace it in person.
   const { position: livePosition, heading, needsCompassPermission, enableCompass } =
     useLiveGeolocation({ active: true });
 
@@ -49,8 +58,11 @@ const TrailDetail = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-zinc-900 text-white flex items-center justify-center">
-        Loading trail...
+      <div className="min-h-screen bg-canvas text-ink flex items-center justify-center">
+        <div className="flex items-center gap-3 text-ink-muted">
+          <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+          Loading trail...
+        </div>
       </div>
     );
   }
@@ -60,35 +72,28 @@ const TrailDetail = () => {
   const distanceKm = (trail.distanceMeters / 1000).toFixed(2);
 
   return (
-    <div className="h-screen w-full bg-zinc-900 text-white flex flex-col overflow-hidden">
-      <div className="p-4 bg-zinc-800 shadow-md flex items-center gap-3 shrink-0">
-        <button
-          onClick={() => navigate("/")}
-          className="text-zinc-300 hover:text-white"
-          aria-label="Back"
-        >
-          <FaArrowLeft size={18} />
-        </button>
-        <div>
-          <h1 className="font-semibold text-lg">{trail.title}</h1>
-          <p className="text-xs text-zinc-400">
-            {new Date(trail.startedAt).toLocaleString()}
-          </p>
+    <div className="h-screen w-full bg-canvas text-ink flex flex-col overflow-hidden">
+      <div className="px-4 pt-4 pb-3 bg-surface border-b border-border shadow-lg shrink-0">
+        <div className="flex items-center gap-3 mb-3">
+          <button
+            onClick={() => navigate("/")}
+            className="text-ink-muted hover:text-ink w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-2 transition"
+            aria-label="Back"
+          >
+            <FaArrowLeft size={16} />
+          </button>
+          <div className="min-w-0">
+            <h1 className="font-display font-bold text-base truncate">{trail.title}</h1>
+            <p className="text-xs text-ink-faint">
+              {new Date(trail.startedAt).toLocaleString()}
+            </p>
+          </div>
         </div>
-      </div>
 
-      <div className="grid grid-cols-3 gap-2 p-3 bg-zinc-800/60 text-center text-sm shrink-0">
-        <div className="flex flex-col items-center gap-1">
-          <FaRoute className="text-amber-500" />
-          <span>{distanceKm} km</span>
-        </div>
-        <div className="flex flex-col items-center gap-1">
-          <FaClock className="text-amber-500" />
-          <span>{formatDuration(trail.startedAt, trail.endedAt)}</span>
-        </div>
-        <div className="flex flex-col items-center gap-1">
-          <FaMapMarkedAlt className="text-amber-500" />
-          <span>{trail.pointCount} points</span>
+        <div className="flex gap-2">
+          <StatChip icon={FaRoute} label="Distance" value={`${distanceKm} km`} />
+          <StatChip icon={FaClock} label="Duration" value={formatDuration(trail.startedAt, trail.endedAt)} />
+          <StatChip icon={FaMapMarkedAlt} label="Points" value={trail.pointCount} />
         </div>
       </div>
 
@@ -98,15 +103,16 @@ const TrailDetail = () => {
           liveLocation={livePosition}
           heading={heading}
           followByDefault={false}
+          navModeDefault={false}
           height="100%"
         />
 
         {needsCompassPermission && (
           <button
             onClick={enableCompass}
-            className="absolute top-3 left-3 z-[1000] bg-white/95 text-zinc-800 text-sm font-medium px-3 py-2 rounded-lg shadow-lg flex items-center gap-2"
+            className="absolute top-3 left-3 z-[1000] bg-surface border border-border text-ink text-sm font-medium px-3 py-2 rounded-full shadow-lg flex items-center gap-2"
           >
-            <FaCompass className="text-blue-600" /> Enable compass
+            <FaCompass className="text-accent" /> Enable compass
           </button>
         )}
       </div>

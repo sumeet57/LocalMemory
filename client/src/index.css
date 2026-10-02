@@ -1,1 +1,39 @@
 @import "tailwindcss";
+
+@theme {
+  /* Core surfaces — true-black app shell with slightly lifted card layers
+     so the UI reads as "black" without looking like a flat void. */
+  --color-canvas: #0a0a0a;
+  --color-surface: #141414;
+  --color-surface-2: #1c1c1c;
+  --color-border: #2a2a2a;
+
+  /* Text — warm cream rather than stark white, easier on the eyes at
+     this contrast level and a touch more "premium outdoors brand". */
+  --color-ink: #f6f3ec;
+  --color-ink-muted: #a8a49c;
+  --color-ink-faint: #6b6762;
+
+  /* Accent — yellow-400, used for every primary action / highlight. */
+  --color-accent: #facc15;
+  --color-accent-hover: #eab308;
+  --color-accent-ink: #171305;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Sora", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+html, body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Thin, unobtrusive scrollbars that match the dark theme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 999px; }
+

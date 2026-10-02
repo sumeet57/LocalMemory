@@ -9,51 +9,56 @@ import {
   FaClock,
   FaMapMarkedAlt,
   FaTrash,
+  FaMountain,
+  FaChevronRight,
 } from "react-icons/fa";
 import { UserContext } from "../context/UserContext";
 import { trailApi } from "../interceptors/Trail.api";
 
 const statusBadge = (status) =>
   status === "active"
-    ? "bg-green-600/20 text-green-400 border border-green-600/40"
-    : "bg-zinc-700 text-zinc-300 border border-zinc-600";
+    ? "bg-accent/15 text-accent border border-accent/30"
+    : "bg-surface-2 text-ink-muted border border-border";
 
 const TrailCard = ({ trail, onOpen, onDelete }) => {
   const distanceKm = (trail.distanceMeters / 1000).toFixed(2);
   return (
     <div
       onClick={() => onOpen(trail._id)}
-      className="bg-zinc-800 hover:bg-zinc-750 hover:bg-zinc-700/70 transition rounded-xl p-4 cursor-pointer border border-zinc-700 flex justify-between items-center"
+      className="group bg-surface hover:bg-surface-2 transition rounded-2xl p-4 cursor-pointer border border-border flex justify-between items-center"
     >
-      <div>
-        <div className="flex items-center gap-2 mb-1">
-          <h3 className="font-semibold">{trail.title}</h3>
-          <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase ${statusBadge(trail.status)}`}>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 mb-1.5">
+          <h3 className="font-display font-semibold text-ink truncate">{trail.title}</h3>
+          <span className={`text-[9px] shrink-0 px-2 py-0.5 rounded-full uppercase font-semibold tracking-wide ${statusBadge(trail.status)}`}>
             {trail.status}
           </span>
         </div>
-        <p className="text-xs text-zinc-400 mb-2">
+        <p className="text-xs text-ink-faint mb-3">
           {new Date(trail.startedAt || trail.createdAt).toLocaleString()}
         </p>
-        <div className="flex gap-4 text-xs text-zinc-300">
-          <span className="flex items-center gap-1">
-            <FaRoute className="text-amber-500" /> {distanceKm} km
+        <div className="flex gap-4 text-xs text-ink-muted">
+          <span className="flex items-center gap-1.5">
+            <FaRoute className="text-accent" size={11} /> {distanceKm} km
           </span>
-          <span className="flex items-center gap-1">
-            <FaMapMarkedAlt className="text-amber-500" /> {trail.pointCount} pts
+          <span className="flex items-center gap-1.5">
+            <FaMapMarkedAlt className="text-accent" size={11} /> {trail.pointCount} pts
           </span>
         </div>
       </div>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete(trail._id);
-        }}
-        className="text-zinc-500 hover:text-red-500 p-2"
-        aria-label="Delete trail"
-      >
-        <FaTrash />
-      </button>
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(trail._id);
+          }}
+          className="text-ink-faint hover:text-red-500 p-2.5 rounded-full hover:bg-red-500/10 transition"
+          aria-label="Delete trail"
+        >
+          <FaTrash size={13} />
+        </button>
+        <FaChevronRight className="text-ink-faint group-hover:text-accent transition hidden sm:block" size={13} />
+      </div>
     </div>
   );
 };
@@ -71,7 +76,6 @@ const Home = () => {
       const res = await trailApi.get("/");
       setTrails(res.data || []);
     } catch (error) {
-      // Not logged in yet, or a transient error — fail quietly on the dashboard
       setTrails([]);
     } finally {
       setLoadingTrails(false);
@@ -96,60 +100,87 @@ const Home = () => {
 
   if (userLoading) {
     return (
-      <div className="min-h-screen bg-zinc-900 text-white flex items-center justify-center">
-        Loading...
+      <div className="min-h-screen bg-canvas text-ink flex items-center justify-center">
+        <div className="flex items-center gap-3 text-ink-muted">
+          <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+          Loading...
+        </div>
       </div>
     );
   }
 
   if (!user) {
     return (
-      <div className="w-full h-screen bg-zinc-900 text-white flex justify-center items-center gap-4 flex-col p-6 text-center">
-        <h1 className="text-3xl md:text-4xl font-bold">Real-Time Forest Trail Tracker</h1>
-        <p className="text-zinc-400 max-w-md">
-          Sign in to record and revisit your hikes with live GPS tracking.
+      <div className="w-full h-screen bg-canvas text-ink flex justify-center items-center flex-col p-6 text-center relative overflow-hidden">
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(700px circle at 50% 30%, rgba(250,204,21,0.08), transparent 70%)",
+          }}
+        />
+        <div className="relative w-16 h-16 rounded-2xl bg-accent flex items-center justify-center mb-6">
+          <FaMountain className="text-accent-ink" size={28} />
+        </div>
+        <h1 className="relative font-display text-3xl md:text-4xl font-bold max-w-lg">
+          Real-Time Forest Trail Tracker
+        </h1>
+        <p className="relative text-ink-muted max-w-md mt-3 mb-8">
+          Record, follow, and revisit your hikes with live GPS tracking built
+          for the trail.
         </p>
         <button
-          className="flex items-center gap-2 bg-amber-500 px-6 py-3 uppercase rounded-lg font-semibold"
+          className="relative flex items-center gap-2 bg-accent hover:bg-accent-hover text-accent-ink px-7 py-3.5 rounded-full font-semibold transition active:scale-95 shadow-lg shadow-accent/10"
           onClick={() => navigate("/auth")}
         >
-          <FaSignInAlt /> Sign in
+          <FaSignInAlt size={14} /> Sign in
         </button>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-900 text-white">
-      <div className="p-4 md:p-6 flex justify-between items-center border-b border-zinc-800 sticky top-0 bg-zinc-900/95 backdrop-blur z-10">
-        <div>
-          <h1 className="text-xl md:text-2xl font-bold">
-            Welcome, {user?.fullName?.firstName}
-          </h1>
-          <p className="text-xs text-zinc-400">Your trail history</p>
+    <div className="min-h-screen bg-canvas text-ink">
+      <div className="px-4 md:px-6 py-4 flex justify-between items-center border-b border-border sticky top-0 bg-canvas/90 backdrop-blur-md z-10">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-accent flex items-center justify-center shrink-0">
+            <FaMountain className="text-accent-ink" size={16} />
+          </div>
+          <div>
+            <h1 className="font-display text-base md:text-lg font-bold leading-tight">
+              Hey, {user?.fullName?.firstName}
+            </h1>
+            <p className="text-xs text-ink-faint">Your trail history</p>
+          </div>
         </div>
         <button
-          className="flex items-center gap-2 bg-red-600/90 hover:bg-red-600 px-3 py-2 rounded-lg text-sm"
+          className="flex items-center gap-2 text-ink-muted hover:text-ink border border-border hover:border-ink-faint px-3 py-2 rounded-full text-sm transition"
           onClick={async () => await logout()}
         >
-          <FaSignOutAlt /> Logout
+          <FaSignOutAlt size={13} /> Logout
         </button>
       </div>
 
-      <div className="p-4 md:p-6 max-w-3xl mx-auto">
+      <div className="p-4 md:p-6 max-w-2xl mx-auto">
         <button
           onClick={() => navigate("/trail/live")}
-          className="w-full flex items-center justify-center gap-3 bg-amber-500 hover:bg-amber-400 text-zinc-900 font-bold text-lg py-4 rounded-xl shadow-lg mb-6 transition"
+          className="w-full flex items-center justify-center gap-3 bg-accent hover:bg-accent-hover text-accent-ink font-bold text-lg py-4 rounded-2xl shadow-lg shadow-accent/10 mb-8 transition active:scale-[0.99]"
         >
-          <FaPlay /> Start Trail
+          <FaPlay size={15} /> Start Trail
         </button>
 
+        <h2 className="text-xs uppercase tracking-wide text-ink-faint font-semibold mb-3 px-1">
+          Recent trails
+        </h2>
+
         {loadingTrails ? (
-          <p className="text-zinc-400 text-center py-8">Loading trails...</p>
+          <p className="text-ink-muted text-center py-10 text-sm">Loading trails...</p>
         ) : trails.length === 0 ? (
-          <div className="text-center py-16 text-zinc-500">
-            <FaClock className="mx-auto text-4xl mb-3" />
-            <p>No trails recorded yet. Hit "Start Trail" to begin your first hike.</p>
+          <div className="text-center py-16 text-ink-faint border border-dashed border-border rounded-2xl">
+            <FaClock className="mx-auto text-3xl mb-3 opacity-60" />
+            <p className="text-sm max-w-xs mx-auto">
+              No trails recorded yet. Hit "Start Trail" to begin your first hike.
+            </p>
           </div>
         ) : (
           <div className="flex flex-col gap-3">
