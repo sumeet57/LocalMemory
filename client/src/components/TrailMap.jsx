@@ -1,14 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  MapContainer,
-  TileLayer,
-  Polyline,
-  Marker,
-  Circle,
-  useMap,
-} from "react-leaflet";
-import L from "leaflet";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { MapContainer, TileLayer, Polyline, Marker, Circle, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
+import L from "../lib/leafletRotateSetup";
 import { FaLocationArrow, FaCompass } from "react-icons/fa";
 import { nearestPointOnPolyline } from "../utils/geo.utils";
 
@@ -49,12 +42,18 @@ const startIcon = new L.Icon({
 });
 
 // ---------------------------------------------------------------------------
-// Google-Maps-style "you are here" marker: a blue dot with a white ring, a
-// soft pulsing halo when we don't know which way the user is facing, and a
-// directional "flashlight" cone when we do. In heading-up (nav) mode the
-// whole map is rotated so travel direction always points to the top of the
-// screen, so the cone itself is drawn pointing straight up (0deg) in that
-// mode — the outer map rotation is what encodes the real-world direction.
+// Google-Maps-style "you are here" marker: a dot with a white ring, a soft
+// pulsing halo when we don't know which way the user is facing, and a
+// directional "flashlight" cone when we do.
+//
+// Important: leaflet-rotate keeps the marker pane screen-upright by design
+// (so pins/labels don't tip over when the map rotates) — only the tile and
+// overlay panes (the base map, the trail line) actually rotate. That means
+// our cone, which we draw by hand inside the marker's own icon, has to
+// manually add the map's current bearing back in to stay correct: as the
+// world rotates under you, the cone must counter-rotate by the same amount
+// so it keeps pointing at your true compass heading rather than drifting
+// with the map.
 // ---------------------------------------------------------------------------
 const LOCATION_STYLE_ID = "trail-tracker-live-marker-styles";
 function ensureLocationMarkerStyles() {
@@ -81,14 +80,14 @@ function ensureLocationMarkerStyles() {
 // group with a CSS transform instead of recomputing the path per heading.
 const CONE_PATH = "M60,60 L34.565,19.296 A48,48 0 0,1 85.435,19.296 Z";
 
-function buildLocationIcon(coneHeading, offTrail) {
-  const hasHeading = typeof coneHeading === "number" && !Number.isNaN(coneHeading);
+function buildLocationIcon(coneScreenAngle, offTrail) {
+  const hasHeading = typeof coneScreenAngle === "number" && !Number.isNaN(coneScreenAngle);
   const dotColor = offTrail ? "#f59e0b" : "#3b82f6"; // amber when off the recorded path
 
   const cone = hasHeading
     ? `<svg width="120" height="120" viewBox="0 0 120 120"
           style="position:absolute; top:-40px; left:-40px;
-                 transform:rotate(${coneHeading}deg); transform-origin:60px 60px;">
+                 transform:rotate(${coneScreenAngle}deg); transform-origin:60px 60px;">
          <defs>
            <radialGradient id="trailConeGrad" cx="50%" cy="100%" r="100%">
              <stop offset="0%" stop-color="${dotColor}" stop-opacity="0.6" />
@@ -118,20 +117,17 @@ function buildLocationIcon(coneHeading, offTrail) {
 /** The live "you are here" marker: dot + facing cone + GPS accuracy halo.
  *  Turns amber if the raw fix is far enough from the recorded trail that we
  *  chose not to snap it onto the line (i.e. you've actually wandered off). */
-function LiveLocationMarker({ position, coneHeading, accuracy, offTrail }) {
+function LiveLocationMarker({ position, coneScreenAngle, accuracy, offTrail }) {
   useEffect(() => {
     ensureLocationMarkerStyles();
   }, []);
 
-  const roundedHeading =
-    typeof coneHeading === "number" && !Number.isNaN(coneHeading)
-      ? Math.round(coneHeading / 3) * 3
+  const rounded =
+    typeof coneScreenAngle === "number" && !Number.isNaN(coneScreenAngle)
+      ? Math.round(coneScreenAngle / 3) * 3
       : null;
 
-  const icon = useMemo(
-    () => buildLocationIcon(roundedHeading, offTrail),
-    [roundedHeading, offTrail]
-  );
+  const icon = useMemo(() => buildLocationIcon(rounded, offTrail), [rounded, offTrail]);
 
   if (!position) return null;
 
@@ -190,6 +186,24 @@ function DetectManualPan({ onUserPanned }) {
   return null;
 }
 
+// Keeps bearing state in sync with the map's *actual* current rotation —
+// whether it got there via our own compass-follow effect or the person's
+// own two-finger rotate gesture — and tells the parent when a rotate wasn't
+// something we asked for, so auto-follow can step aside for manual input.
+function BearingSync({ onBearingChange, onManualRotate, programmaticRef }) {
+  const map = useMap();
+  useEffect(() => {
+    const handler = () => {
+      onBearingChange(map.getBearing());
+      if (!programmaticRef.current) onManualRotate();
+    };
+    map.on("rotate", handler);
+    onBearingChange(map.getBearing());
+    return () => map.off("rotate", handler);
+  }, [map, onBearingChange, onManualRotate, programmaticRef]);
+  return null;
+}
+
 // Fits the map bounds to the full breadcrumb path once (used for historical view)
 function FitToPath({ points, skip }) {
   const map = useMap();
@@ -209,9 +223,12 @@ function FitToPath({ points, skip }) {
  * liveLocation: { lat, lng, accuracy } | null — the device's live position
  * heading: number | null — compass/GPS facing direction, in degrees
  * followByDefault: auto-follow the live position as it updates
- * navModeDefault: start in "heading-up" navigation mode (map rotates so
- *   your direction of travel always points up the screen, Google-Maps-nav
- *   style) vs. a fixed north-up map. The person can toggle this at any time.
+ * navModeDefault: start in "heading-up" navigation mode (the map itself
+ *   rotates so your direction of travel always points up the screen,
+ *   Google-Maps-nav style). The person can always two-finger-rotate the
+ *   map manually too — that's a real gesture now, not faked — and can tap
+ *   the compass button to snap back to north-up, or recenter to resume
+ *   following.
  */
 const TrailMap = ({
   points = [],
@@ -222,14 +239,17 @@ const TrailMap = ({
   height = "100%",
 }) => {
   const mapRef = useRef(null);
+  const programmaticRotateRef = useRef(false);
+
   const [follow, setFollow] = useState(followByDefault);
   const [headingUp, setHeadingUp] = useState(navModeDefault);
+  const [mapBearing, setMapBearing] = useState(0);
 
   const hasPoints = points.length > 0;
   const start = hasPoints ? points[0] : null;
   const polylinePositions = points.map((p) => [p.lat, p.lng]);
 
-  // ---- Snap-to-trail ----------------------------------------------------
+  // ---- Snap-to-trail ------------------------------------------------
   // Two different GPS sessions (recording vs. re-walking later) almost
   // never trace pixel-identical coordinates even on the same physical
   // path. Snap the displayed dot onto the nearest point of the recorded
@@ -257,14 +277,31 @@ const TrailMap = ({
       ? [points[points.length - 1].lat, points[points.length - 1].lng]
       : [20.5937, 78.9629]); // fallback: center of India
 
-  // In heading-up mode, the cone is drawn pointing straight up (0deg)
-  // because the map rotation itself already encodes the real direction.
-  const coneHeading = headingUp ? 0 : heading;
-  const mapRotationDeg =
-    headingUp && typeof heading === "number" ? -heading : 0;
+  // The marker pane doesn't rotate along with the base map (by design, so
+  // pins stay upright) — so to make the cone represent your true compass
+  // heading correctly regardless of how the map is currently rotated, we
+  // have to manually add the map's live bearing back in.
+  const coneScreenAngle =
+    typeof heading === "number" ? (heading + mapBearing + 360) % 360 : null;
+
+  // Push our compass-follow bearing onto the map whenever it's engaged.
+  // Tagged as "programmatic" so BearingSync doesn't mistake this for a
+  // manual gesture and immediately cancel follow mode.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (headingUp && typeof heading === "number") {
+      programmaticRotateRef.current = true;
+      map.setBearing(((-heading % 360) + 360) % 360);
+      requestAnimationFrame(() => {
+        programmaticRotateRef.current = false;
+      });
+    }
+  }, [headingUp, heading]);
 
   const handleRecenter = () => {
     setFollow(true);
+    setHeadingUp(true);
     if (mapRef.current && displayPosition) {
       mapRef.current.setView(
         displayPosition,
@@ -274,107 +311,115 @@ const TrailMap = ({
     }
   };
 
+  const handleResetNorth = () => {
+    setHeadingUp(false);
+    if (mapRef.current) {
+      programmaticRotateRef.current = true;
+      mapRef.current.setBearing(0);
+      requestAnimationFrame(() => {
+        programmaticRotateRef.current = false;
+      });
+    }
+  };
+
   return (
     <div
       style={{ height, width: "100%", minHeight: "300px", position: "relative" }}
       className="rounded-lg overflow-hidden bg-surface"
     >
-      {/* Rotation wrapper: scaled up so corners stay covered while rotated.
-          A CSS transform on this wrapper doesn't affect Leaflet's own size
-          measurements (those read layout box size, untouched by transform),
-          so pan/zoom math underneath stays correct — only the paint rotates. */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          transform: `rotate(${mapRotationDeg}deg) scale(${headingUp ? 1.6 : 1})`,
-          transformOrigin: "center center",
-          transition: "transform 0.25s linear",
-        }}
+      <MapContainer
+        ref={mapRef}
+        center={initialCenter}
+        zoom={hasPoints || liveLocation ? 16 : 5}
+        maxZoom={20}
+        scrollWheelZoom={true}
+        // Real map rotation (leaflet-rotate): correct drag math and a
+        // genuine two-finger touch-rotate gesture, not a CSS-transform hack.
+        rotate={true}
+        touchRotate={true}
+        bearing={0}
+        rotateControl={false}
+        zoomControl={false}
+        style={{ height: "100%", width: "100%" }}
       >
-        <MapContainer
-          ref={mapRef}
-          center={initialCenter}
-          zoom={hasPoints || liveLocation ? 16 : 5}
+        {/* Standard OSM "normal" street/terrain map layer. maxNativeZoom
+            caps the actual tile requests at 19 (OSM's real max); anything
+            past that just upscales the last tile so you can still zoom in
+            closer on a tight trail loop without the map refusing to zoom. */}
+        <TileLayer
+          attribution='&copy; OpenStreetMap contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           maxZoom={20}
-          scrollWheelZoom={true}
-          dragging={!headingUp}
-          zoomControl={false}
-          attributionControl={false}
-          style={{ height: "100%", width: "100%" }}
-        >
-          {/* Standard OSM "normal" street/terrain map layer. maxNativeZoom
-              caps the actual tile requests at 19 (OSM's real max); anything
-              past that just upscales the last tile so you can still zoom in
-              closer on a tight trail loop without the map refusing to zoom. */}
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            maxZoom={20}
-            maxNativeZoom={19}
+          maxNativeZoom={19}
+        />
+
+        {hasPoints && (
+          <Polyline
+            positions={polylinePositions}
+            // smoothFactor={0} disables Leaflet's default line simplification,
+            // which otherwise nudges the rendered line away from the exact
+            // recorded coordinates.
+            smoothFactor={0}
+            pathOptions={{ color: "#dc2626", weight: 5, opacity: 0.9 }}
           />
+        )}
 
-          {hasPoints && (
-            <Polyline
-              positions={polylinePositions}
-              // smoothFactor={0} disables Leaflet's default line simplification,
-              // which otherwise nudges the rendered line away from the exact
-              // recorded coordinates.
-              smoothFactor={0}
-              pathOptions={{ color: "#dc2626", weight: 5, opacity: 0.9 }}
-            />
-          )}
+        {start && <Marker position={[start.lat, start.lng]} icon={startIcon} />}
 
-          {start && <Marker position={[start.lat, start.lng]} icon={startIcon} />}
+        {liveLocation && (
+          <LiveLocationMarker
+            position={displayPosition}
+            coneScreenAngle={coneScreenAngle}
+            accuracy={isOffTrail ? liveLocation.accuracy : null}
+            offTrail={isOffTrail}
+          />
+        )}
 
-          {liveLocation && (
-            <LiveLocationMarker
-              position={displayPosition}
-              coneHeading={coneHeading}
-              accuracy={isOffTrail ? liveLocation.accuracy : null}
-              offTrail={isOffTrail}
-            />
-          )}
+        {liveLocation && (
+          <>
+            <FollowOnUpdate position={displayPosition} follow={follow} />
+            <DetectManualPan onUserPanned={() => setFollow(false)} />
+            <AutoZoomOnStart position={displayPosition} enabled={followByDefault} />
+          </>
+        )}
 
-          {liveLocation && (
-            <>
-              <FollowOnUpdate position={displayPosition} follow={follow} />
-              <DetectManualPan onUserPanned={() => setFollow(false)} />
-              <AutoZoomOnStart position={displayPosition} enabled={followByDefault} />
-            </>
-          )}
+        <BearingSync
+          onBearingChange={setMapBearing}
+          onManualRotate={() => setHeadingUp(false)}
+          programmaticRef={programmaticRotateRef}
+        />
 
-          {!followByDefault && <FitToPath points={points} skip={!!liveLocation} />}
-          <InvalidateSizeOnMount watch={points.length + (liveLocation ? 1 : 0)} />
-        </MapContainer>
-      </div>
+        {!followByDefault && <FitToPath points={points} skip={!!liveLocation} />}
+        <InvalidateSizeOnMount watch={points.length + (liveLocation ? 1 : 0)} />
+      </MapContainer>
 
-      {/* Attribution rendered outside the rotation wrapper so it always
-          stays upright and legible regardless of map rotation. */}
-      <div className="absolute bottom-1 left-1.5 z-[999] text-[9px] leading-none text-ink-faint/80 bg-canvas/50 px-1.5 py-0.5 rounded">
+      {/* Leaflet's attribution control is turned off above (keeps the UI
+          clean) — OSM still requires credit, shown here as plain HTML.
+          Since this sits outside the map's own rotate pane, it always
+          stays upright regardless of map bearing. */}
+      <div className="absolute bottom-1 left-1.5 z-[999] text-[9px] leading-none text-ink-faint/80 bg-canvas/50 px-1.5 py-0.5 rounded pointer-events-none">
         © OpenStreetMap contributors
       </div>
 
       {liveLocation && (
         <button
-          onClick={() => setHeadingUp((v) => !v)}
-          aria-label={headingUp ? "Switch to north-up map" : "Switch to heading-up navigation"}
-          title={headingUp ? "North-up" : "Heading-up (nav)"}
-          className={`absolute top-3 right-3 z-[1000] rounded-full w-10 h-10 flex items-center justify-center shadow-lg active:scale-95 transition border ${
-            headingUp
-              ? "bg-accent text-accent-ink border-accent"
-              : "bg-surface-2 text-ink border-border"
-          }`}
+          onClick={handleResetNorth}
+          aria-label="Reset map to north-up"
+          title="North-up"
+          className="absolute top-3 right-3 z-[1000] rounded-full w-10 h-10 flex items-center justify-center shadow-lg active:scale-95 transition bg-surface-2 border border-border text-ink"
         >
-          <FaCompass style={{ transform: `rotate(${headingUp ? 0 : -(heading || 0)}deg)` }} />
+          <FaCompass style={{ transform: `rotate(${-mapBearing}deg)` }} />
         </button>
       )}
 
       {liveLocation && (
         <button
           onClick={handleRecenter}
-          aria-label="Recenter on my location"
+          aria-label="Recenter and resume navigation"
           className={`absolute bottom-5 right-4 z-[1000] rounded-full w-11 h-11 flex items-center justify-center shadow-lg active:scale-95 transition ${
-            follow ? "bg-accent text-accent-ink" : "bg-surface-2 text-ink border border-border"
+            follow && headingUp
+              ? "bg-accent text-accent-ink"
+              : "bg-surface-2 text-ink border border-border"
           }`}
         >
           <FaLocationArrow />

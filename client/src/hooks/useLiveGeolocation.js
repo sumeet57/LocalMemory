@@ -83,22 +83,64 @@ export function useLiveGeolocation({ active = true, onAccepted } = {}) {
     setHeading(next);
   }, []);
 
+  // The current screen rotation (0/90/180/270). A compass reading is taken
+  // relative to the device's physical frame, not the screen's visual "up" —
+  // if the screen has been rotated into landscape, we need to add that
+  // offset back in, or "forward" on screen silently drifts 90°/180° off
+  // from the direction the camera/top-edge is actually pointing.
+  const getScreenAngle = () => {
+    if (typeof screen !== "undefined" && screen.orientation && typeof screen.orientation.angle === "number") {
+      return screen.orientation.angle;
+    }
+    if (typeof window.orientation === "number") return window.orientation; // older iOS
+    return 0;
+  };
+
   const handleOrientation = useCallback(
     (event) => {
-      let h;
+      let h = null;
+
       if (typeof event.webkitCompassHeading === "number") {
-        // iOS Safari: already a compass bearing (0 = north, clockwise)
+        // iOS Safari: already a true compass bearing (0 = north, clockwise),
+        // and Apple already accounts for screen rotation internally.
         h = event.webkitCompassHeading;
-      } else if (typeof event.alpha === "number") {
-        h = (360 - event.alpha) % 360;
+      } else if (
+        // Only trust alpha as a real compass reading when it's actually
+        // referenced to true/magnetic north. The plain "deviceorientation"
+        // event does NOT guarantee this — on plenty of Android WebViews
+        // (including the one Capacitor apps run in) it fires with alpha
+        // measured from an arbitrary starting angle, not north. Using that
+        // unconditionally is what made the facing-direction indicator
+        // unreliable. We only trust it when the event type itself
+        // guarantees an absolute reference, or the event explicitly says so.
+        event.type === "deviceorientationabsolute" ||
+        event.absolute === true
+      ) {
+        if (typeof event.alpha === "number") {
+          h = (360 - event.alpha + getScreenAngle()) % 360;
+        }
       }
+
       if (typeof h === "number" && !Number.isNaN(h)) {
         compassActiveRef.current = true;
-        applySmoothedHeading(h);
+        applySmoothedHeading(((h % 360) + 360) % 360);
       }
+      // If neither branch produced a trustworthy reading, we deliberately
+      // do nothing — handleRawFix's GPS-course/movement-bearing fallback
+      // takes over instead of displaying an uncalibrated direction.
     },
     [applySmoothedHeading]
   );
+
+  const attachOrientationListeners = useCallback(() => {
+    // Listen for both event types. Where "deviceorientationabsolute" is
+    // supported it's the authoritative one; some browsers only ever fire
+    // plain "deviceorientation" but still mark it absolute — handled by
+    // the trust check inside handleOrientation either way.
+    window.addEventListener("deviceorientationabsolute", handleOrientation, true);
+    window.addEventListener("deviceorientation", handleOrientation, true);
+    orientationEventNameRef.current = true;
+  }, [handleOrientation]);
 
   const enableCompass = useCallback(async () => {
     if (
@@ -108,12 +150,7 @@ export function useLiveGeolocation({ active = true, onAccepted } = {}) {
       try {
         const result = await DeviceOrientationEvent.requestPermission();
         if (result === "granted") {
-          const eventName =
-            "ondeviceorientationabsolute" in window
-              ? "deviceorientationabsolute"
-              : "deviceorientation";
-          window.addEventListener(eventName, handleOrientation, true);
-          orientationEventNameRef.current = eventName;
+          attachOrientationListeners();
         }
       } catch (err) {
         console.warn("Compass permission request failed:", err);
@@ -121,7 +158,7 @@ export function useLiveGeolocation({ active = true, onAccepted } = {}) {
         setNeedsCompassPermission(false);
       }
     }
-  }, [handleOrientation]);
+  }, [attachOrientationListeners]);
 
   // Runs for every raw GPS fix the OS hands us (as often as it's willing
   // to provide one) — this is what makes the live dot feel immediately
@@ -213,12 +250,7 @@ export function useLiveGeolocation({ active = true, onAccepted } = {}) {
     if (requiresExplicitPermission) {
       setNeedsCompassPermission(true);
     } else if (typeof window.DeviceOrientationEvent !== "undefined") {
-      const eventName =
-        "ondeviceorientationabsolute" in window
-          ? "deviceorientationabsolute"
-          : "deviceorientation";
-      window.addEventListener(eventName, handleOrientation, true);
-      orientationEventNameRef.current = eventName;
+      attachOrientationListeners();
     }
 
     // ---- GPS ----
@@ -281,15 +313,12 @@ export function useLiveGeolocation({ active = true, onAccepted } = {}) {
         intervalRef.current = null;
       }
       if (orientationEventNameRef.current) {
-        window.removeEventListener(
-          orientationEventNameRef.current,
-          handleOrientation,
-          true
-        );
+        window.removeEventListener("deviceorientationabsolute", handleOrientation, true);
+        window.removeEventListener("deviceorientation", handleOrientation, true);
         orientationEventNameRef.current = null;
       }
     };
-  }, [active, handleOrientation, handleRawFix]);
+  }, [active, attachOrientationListeners, handleRawFix]);
 
   return { position, heading, isStale, needsCompassPermission, enableCompass };
 }
